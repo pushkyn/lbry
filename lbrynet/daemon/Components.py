@@ -424,12 +424,18 @@ class DHTComponent(Component):
         node_id = CS.get_node_id()
         if node_id is None:
             node_id = generate_id()
+        external_ip = self.upnp_component.external_ip
+        if not external_ip:
+            log.warning("UPnP component failed to get external ip")
+            external_ip = CS.get_external_ip()
+            if not external_ip:
+                log.warning("failed to get external ip")
 
         self.dht_node = node.Node(
             node_id=node_id,
             udpPort=GCS('dht_node_port'),
             externalUDPPort=self.external_udp_port,
-            externalIP=self.upnp_component.external_ip,
+            externalIP=external_ip,
             peerPort=self.external_peer_port
         )
 
@@ -710,21 +716,27 @@ class UPnPComponent(Component):
                 log.info("found upnp gateway: %s", self.upnp.gateway.manufacturer_string)
             except Exception as err:
                 log.warning("upnp discovery failed: %s", err)
-                return
+                self.upnp = None
 
         # update the external ip
-        try:
-            external_ip = yield from_future(self.upnp.get_external_ip())
-            if external_ip == "0.0.0.0":
-                log.warning("upnp doesn't know the external ip address (returned 0.0.0.0), using fallback")
-                external_ip = CS.get_external_ip()
-            if self.external_ip and self.external_ip != external_ip:
-                log.info("external ip changed from %s to %s", self.external_ip, external_ip)
-            elif not self.external_ip:
-                log.info("got external ip: %s", external_ip)
-            self.external_ip = external_ip
-        except (asyncio.TimeoutError, UPnPError):
-            pass
+        external_ip = None
+        if self.upnp:
+            try:
+                external_ip = yield from_future(self.upnp.get_external_ip())
+            except (asyncio.TimeoutError, UPnPError):
+                pass
+
+        if external_ip == "0.0.0.0":
+            log.warning("upnp doesn't know the external ip address (returned 0.0.0.0), using fallback")
+            external_ip = CS.get_external_ip()
+        elif not external_ip:
+            external_ip = CS.get_external_ip()
+        if self.external_ip and self.external_ip != external_ip:
+            log.info("external ip changed from %s to %s", self.external_ip, external_ip)
+        elif not self.external_ip:
+            log.info("got external ip: %s", external_ip)
+        assert self.external_ip is not None   # TODO: handle going/starting offline
+        self.external_ip = external_ip
 
         if not self.upnp_redirects:  # setup missing redirects
             try:
